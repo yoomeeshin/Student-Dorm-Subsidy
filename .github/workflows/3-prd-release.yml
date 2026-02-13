@@ -1,0 +1,78 @@
+# .github/workflows/prd-deployment.yml
+name: Production Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+' # Matches tags like v1.2.3
+  workflow_dispatch: {}
+
+concurrency:
+  group: "prd-release"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy-next-app:
+    name: ⚙️ Deploy Next.js
+    runs-on: ubuntu-latest
+
+    environment:
+      name: prd
+
+    env:
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      
+    steps:
+      - name: 1. 📄 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. ⚙️ Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: 3. ⚙️ Detect Package Manager
+        id: detect-pm
+        run: |
+          if [ -f "yarn.lock" ]; then
+            echo "manager=yarn" >> $GITHUB_OUTPUT
+            echo "command=install" >> $GITHUB_OUTPUT
+          elif [ -f "package.json" ]; then
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "command=ci" >> $GITHUB_OUTPUT
+          else
+            echo "Unable to detect package manager"
+            exit 1
+          fi
+
+      - name: 4. ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: ${{ steps.detect-pm.outputs.manager }}
+
+      - name: 5. ⬇️ Restore Next.js Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}-${{ hashFiles('**.[jt]s', '**.[jt]sx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}-
+
+      - name: 6. 📦 Install Dependencies
+        run: ${{ steps.detect-pm.outputs.manager }} ${{ steps.detect-pm.outputs.command }}
+    
+      - name: 7. 📦 Install SST Client
+        run: ${{ steps.detect-pm.outputs.manager }} install -g sst
+  
+      - name: 8. 🚧 Deploy with SST
+        run: npx sst deploy --stage prd
+ 
